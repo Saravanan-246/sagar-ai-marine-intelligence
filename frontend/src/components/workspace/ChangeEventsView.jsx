@@ -68,14 +68,20 @@ export default function ChangeEventsView() {
     const midLon = (seg.startCoord[1] + seg.endCoord[1]) / 2;
 
     ingestCustomChangeEvent({
+      id: `EVT-SIM-${seg.id}`,
       eventCoordinates: [Number(midLat.toFixed(4)), Number(midLon.toFixed(4))],
       affectedSegmentId: seg.id,
-      radiusNm: 30,
-      title: `Wave Exceedance Alert (${seg.name.split(" to ")[0]} Corridor)`,
-      description: `Significant wave height observed at 5.2m (exceeds 4.0m limit) along corridor near [${midLat.toFixed(2)}°N, ${midLon.toFixed(2)}°E].`,
-      source: "INCOIS Coastal Observation & Threat Model",
-      sourceType: "COMPUTED",
+      radiusNm: 25,
+      title: `SIMULATED: Significant Wave Height 4.8m Exceeds 4.0m Limit on Leg ${seg.id}`,
+      description: `SIMULATED TEST EVENT: Controlled wave exceedance (SWH 4.8m > allowed 4.0m limit) injected on Leg ${seg.id}. Evaluates dependency breach without altering real INCOIS observations.`,
+      source: "SIMULATED Marine Observation Benchmark",
+      sourceType: "SIMULATED",
+      quality: "SIMULATED_DEMO_BENCHMARK",
       severity: "HIGH",
+      breachParameter: "significant_wave_height",
+      breachValue: 4.8,
+      breachThreshold: 4.0,
+      isReal: false,
     });
   };
 
@@ -309,24 +315,29 @@ export default function ChangeEventsView() {
 
         {/* Quick Corridor Leg Triggers */}
         <div className="space-y-1.5">
-          <span className="text-[10px] font-bold text-slate-600 uppercase tracking-wider block">
-            1. Quick Evaluate Disruption on Route Legs:
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-bold text-slate-700 uppercase tracking-wider block">
+              1. Controlled Demo / Testing — Trigger SIMULATED Breach on One Leg:
+            </span>
+            <span className="rounded bg-amber-100 text-amber-900 border border-amber-300 text-[9px] font-mono font-bold px-1.5 py-0.2">
+              SIMULATED TESTBENCH
+            </span>
+          </div>
           <div className="flex items-center gap-2 flex-wrap">
             {routeSegments.map((seg) => (
               <button
                 key={seg.id}
                 disabled={userRole?.id === "stakeholder_view"}
                 onClick={() => handleEvaluateSegment(seg)}
-                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition ${
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold transition ${
                   userRole?.id === "stakeholder_view"
                     ? "border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed"
-                    : "border-slate-200 bg-slate-50 hover:bg-amber-50 hover:border-amber-300 hover:text-amber-900 text-slate-700 cursor-pointer"
+                    : "border-amber-300 bg-amber-50 hover:bg-amber-100 hover:border-amber-400 text-amber-950 cursor-pointer shadow-2xs"
                 }`}
-                title={userRole?.id === "stakeholder_view" ? "Testing disabled in read-only Stakeholder View" : `Evaluate spatial wave exceedance intersecting Segment ${seg.id}`}
+                title={userRole?.id === "stakeholder_view" ? "Testing disabled in read-only Stakeholder View" : `Inject simulated wave height exceedance (4.8m > 4.0m) exclusively on Leg ${seg.id}`}
               >
                 <AlertTriangle className="h-3.5 w-3.5 text-amber-600" />
-                <span>Evaluate Leg {seg.id} ({seg.name.split(" to ")[0]})</span>
+                <span>SIMULATE Breach on Leg {seg.id}</span>
               </button>
             ))}
 
@@ -339,19 +350,17 @@ export default function ChangeEventsView() {
                   ? "border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed"
                   : marineEvaluating
                   ? "border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed"
-                  : "border-emerald-200 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 cursor-pointer"
+                  : "border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-950 cursor-pointer shadow-2xs"
               }`}
               title="Fetch real INCOIS OSF/PFZ for each route segment midpoint, evaluate against dependency thresholds, and create a change event only if a genuine breach is found."
             >
               <Radio className={`h-3.5 w-3.5 ${marineEvaluating || userRole?.id === "stakeholder_view" ? "text-slate-400" : "text-emerald-700"}`} />
               <span>
-                {marineEvaluating ? "Evaluating INCOIS Evidence…" : "Evaluate Real INCOIS OSF/PFZ Evidence"}
+                {marineEvaluating ? "Evaluating INCOIS Evidence…" : "Evaluate Real INCOIS OSF/PFZ Evidence (REAL)"}
               </span>
-              {userRole?.id === "marine_analyst" && (
-                <span className="rounded bg-emerald-200 text-emerald-950 text-[9px] px-1.5 py-0.2 font-bold uppercase">
-                  Analyst Primary
-                </span>
-              )}
+              <span className="rounded bg-emerald-200 text-emerald-950 text-[9px] px-1.5 py-0.2 font-bold uppercase">
+                REAL DATA
+              </span>
             </button>
 
             {/* Evaluation result badge */}

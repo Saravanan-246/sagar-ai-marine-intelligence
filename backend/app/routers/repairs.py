@@ -10,8 +10,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import Decision, RepairCandidate
+from app.models import Decision, RepairCandidate, RouteSegment, Dependency, ChangeEvent
 from app.schemas import RepairCandidateCreate, RepairCandidateOut
+from app.engine import (
+    SegmentDTO,
+    DependencyDTO,
+    evaluate_decision_impact,
+    generate_minimal_change_repair,
+)
 
 router = APIRouter()
 
@@ -40,6 +46,154 @@ async def list_repair_candidates(
 
 
 @router.post(
+    "/{decision_id}/generate",
+    response_model=RepairCandidateOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def generate_repair(
+    decision_id: str,
+    event_id: str = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Generate a minimal-change repair modifying ONLY the affected segment.
+    Preserves all unaffected segments intact.
+    If no safe repair can be generated, returns NO_SAFE_MINIMAL_REPAIR. Never invents a repair.
+    """
+    decision = await _get_decision_or_404(db, decision_id)
+
+    # 1. Resolve event
+    event = None
+    if event_id:
+        e_res = await db.execute(
+            select(ChangeEvent).where(
+                ChangeEvent.decision_id == decision_id,
+                ChangeEvent.id == event_id,
+            )
+        )
+        event = e_res.scalar_one_or_none()
+    else:
+        e_res = await db.execute(
+            select(ChangeEvent)
+            .where(ChangeEvent.decision_id == decision_id)
+            .order_by(ChangeEvent.created_at.desc())
+        )
+        event = e_res.scalars().first()
+
+    if not event:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No change event found for decision '{decision_id}' to generate a repair.",
+        )
+
+    # 2. Load segments and dependencies
+    seg_result = await db.execute(
+        select(RouteSegment).where(RouteSegment.decision_id == decision_id)
+    )
+    segments = [
+        SegmentDTO(
+            segment_id=s.segment_id,
+            start_lat=s.start_lat,
+            start_lon=s.start_lon,
+            end_lat=s.end_lat,
+            end_lon=s.end_lon,
+        )
+        for s in seg_result.scalars().all()
+    ]
+
+    dep_result = await db.execute(
+        select(Dependency).where(Dependency.decision_id == decision_id)
+    )
+    dependencies = [
+        DependencyDTO(
+            dep_id=d.id,
+            linked_segments=d.linked_segments,
+            impact_level=d.impact_level or "MEDIUM",
+        )
+        for d in dep_result.scalars().all()
+    ]
+
+    event_center = (
+        (event.event_lat, event.event_lon)
+        if event.event_lat is not None and event.event_lon is not None
+        else None
+    )
+
+    # 3. Evaluate impact
+    impact = evaluate_decision_impact(
+        segments=segments,
+        dependencies=dependencies,
+        event_center=event_center,
+        radius_nm=event.radius_nm or 45.0,
+        directly_affected_segment_id=event.affected_segment_id,
+        event_severity=event.severity,
+        event_description=event.description or "",
+        is_catastrophic=event.is_catastrophic,
+    )
+
+    # 4. Generate minimal repair
+    repair_res = generate_minimal_change_repair(
+        segments=segments,
+        impact=impact,
+        linked_event_id=event.id,
+    )
+
+    # If no safe repair could be generated, return unfeasible candidate without database persistence
+    if not repair_res.is_safe or repair_res.id == "NO_SAFE_MINIMAL_REPAIR":
+        return RepairCandidateOut(
+            id="NO_SAFE_MINIMAL_REPAIR",
+            decision_id=decision_id,
+            tier=repair_res.tier,
+            title=repair_res.title,
+            description=repair_res.description,
+            plan_churn=repair_res.plan_churn,
+            preservation_ratio=repair_res.preservation_ratio,
+            what_changes=repair_res.changed_segments,
+            what_remains_unchanged=repair_res.preserved_segments,
+            tradeoffs=repair_res.tradeoffs,
+            feasibility=repair_res.feasibility,
+            score=repair_res.score,
+            recommendation_reason=repair_res.recommendation_reason,
+            linked_event_id=event.id,
+            affected_segment_id=repair_res.affected_segment_id,
+            repair_waypoint_lat=repair_res.repair_waypoint_lat,
+            repair_waypoint_lon=repair_res.repair_waypoint_lon,
+            created_at=None,
+        )
+
+    # Delete any existing candidate with same id
+    existing = await db.get(RepairCandidate, repair_res.id)
+    if existing:
+        await db.delete(existing)
+        await db.flush()
+
+    candidate = RepairCandidate(
+        id=repair_res.id,
+        decision_id=decision_id,
+        tier=repair_res.tier,
+        title=repair_res.title,
+        description=repair_res.description,
+        plan_churn=repair_res.plan_churn,
+        preservation_ratio=repair_res.preservation_ratio,
+        tradeoffs=repair_res.tradeoffs,
+        feasibility=repair_res.feasibility,
+        score=repair_res.score,
+        recommendation_reason=repair_res.recommendation_reason,
+        linked_event_id=event.id,
+        affected_segment_id=repair_res.affected_segment_id,
+        repair_waypoint_lat=repair_res.repair_waypoint_lat,
+        repair_waypoint_lon=repair_res.repair_waypoint_lon,
+    )
+    candidate.what_changes = repair_res.changed_segments
+    candidate.what_remains_unchanged = repair_res.preserved_segments
+
+    db.add(candidate)
+    await db.commit()
+    await db.refresh(candidate)
+    return candidate
+
+
+@router.post(
     "/{decision_id}",
     response_model=RepairCandidateOut,
     status_code=status.HTTP_201_CREATED,
@@ -65,6 +219,9 @@ async def add_repair_candidate(
         score=payload.score,
         recommendation_reason=payload.recommendation_reason,
         linked_event_id=payload.linked_event_id,
+        affected_segment_id=payload.affected_segment_id,
+        repair_waypoint_lat=payload.repair_waypoint_lat,
+        repair_waypoint_lon=payload.repair_waypoint_lon,
     )
     candidate.what_changes = payload.what_changes
     candidate.what_remains_unchanged = payload.what_remains_unchanged

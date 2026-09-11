@@ -182,6 +182,9 @@ class RepairCandidate(Base):
     score = Column(Integer, nullable=True)
     recommendation_reason = Column(Text, nullable=True)
     linked_event_id = Column(String, ForeignKey("change_events.id"), nullable=True)
+    affected_segment_id = Column(String, nullable=True)
+    repair_waypoint_lat = Column(Float, nullable=True)
+    repair_waypoint_lon = Column(Float, nullable=True)
 
     created_at = Column(DateTime(timezone=True), default=_utcnow)
 

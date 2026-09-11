@@ -174,6 +174,15 @@ class ChangeEventCreate(BaseModel):
     is_catastrophic: bool = False
 
 
+class SimulatedBreachRequest(BaseModel):
+    """Explicit simulated change event trigger for demonstration/testing."""
+    segment_id: str
+    swh_m: float = 4.8
+    threshold_m: float = 4.0
+    title: Optional[str] = None
+    description: Optional[str] = None
+
+
 class ChangeEventOut(OrmBase):
     id: str
     decision_id: str
@@ -211,6 +220,9 @@ class RepairCandidateCreate(BaseModel):
     score: Optional[int] = None
     recommendation_reason: Optional[str] = None
     linked_event_id: Optional[str] = None
+    affected_segment_id: Optional[str] = None
+    repair_waypoint_lat: Optional[float] = None
+    repair_waypoint_lon: Optional[float] = None
 
 
 class RepairCandidateOut(OrmBase):
@@ -228,6 +240,9 @@ class RepairCandidateOut(OrmBase):
     score: Optional[int]
     recommendation_reason: Optional[str]
     linked_event_id: Optional[str]
+    affected_segment_id: Optional[str] = None
+    repair_waypoint_lat: Optional[float] = None
+    repair_waypoint_lon: Optional[float] = None
     created_at: Optional[datetime]
 
 
@@ -239,6 +254,7 @@ class ApprovalRequest(BaseModel):
     officer_name: str = Field(..., min_length=3)
     rationale: Optional[str] = None
     verified_items: List[bool] = Field(default_factory=list)
+    candidate_data: Optional[RepairCandidateCreate] = None
 
 
 class RejectionRequest(BaseModel):

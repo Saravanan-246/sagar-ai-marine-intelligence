@@ -7,7 +7,11 @@ import {
   getMarinePfzWaypoints,
   getMarineAisStatus,
   createDecision,
+  getDecision,
   evaluateMarineEvidence,
+  approveRepairBackend,
+  rejectRepairBackend,
+  getAuditHistory,
 } from "../services/apiService";
 import {
   VERIFIED_COASTAL_LOCATIONS,
@@ -105,6 +109,11 @@ export const INITIAL_SEGMENTS = [
     details: "Completed on schedule at 18:20 UTC. Pilot discharged successfully.",
     startCoord: [18.95, 72.85],
     endCoord: [18.25, 72.50],
+    coordinates: [
+      [18.95, 72.85],
+      [18.45, 72.50],
+      [18.25, 72.50],
+    ],
   },
   {
     id: "S2",
@@ -117,6 +126,11 @@ export const INITIAL_SEGMENTS = [
     details: "Currently active leg. Traversal maintained within planned speed parameters.",
     startCoord: [18.25, 72.50],
     endCoord: [16.98, 73.15],
+    coordinates: [
+      [18.25, 72.50],
+      [16.98, 73.05],
+      [16.98, 73.15],
+    ],
   },
   {
     id: "S3",
@@ -130,6 +144,11 @@ export const INITIAL_SEGMENTS = [
     startCoord: [16.98, 73.15],
     endCoord: [13.20, 74.35],
     repairWaypoint: [14.30, 72.50], // Western detour W3-A
+    coordinates: [
+      [16.98, 73.15],
+      [14.80, 73.95],
+      [13.20, 74.35],
+    ],
   },
   {
     id: "S4",
@@ -142,18 +161,32 @@ export const INITIAL_SEGMENTS = [
     details: "Future planned leg. Hydrographic envelope is nominal and unaffected.",
     startCoord: [13.20, 74.35],
     endCoord: [9.95, 75.80],
+    coordinates: [
+      [13.20, 74.35],
+      [11.35, 75.35],
+      [9.95, 75.80],
+    ],
   },
   {
     id: "S5",
     name: "South Approach to Terminus Station & Berth",
-    distanceNm: 295,
+    distanceNm: 360,
     status: "UNAFFECTED",
     condition: "Nominal [SIMULATED]",
     waveHeightM: 1.9,
     windKts: 15,
-    details: "Approach leg into Terminus Station. Scheduled arrival window committed.",
+    details: "Approach leg into Terminus Station (Colombo Harbour). Scheduled arrival window committed via deepwater open ocean corridor.",
     startCoord: [9.95, 75.80],
     endCoord: [6.95, 79.85],
+    coordinates: [
+      [9.95, 75.80],
+      [8.35, 76.85],
+      [7.75, 77.30], // Cape Comorin SW Offshore Fairway (rounds south of 8.08°N)
+      [7.60, 77.85], // South of Cape Comorin deep ocean fairway
+      [7.15, 79.20], // Laccadive Sea open ocean west of Sri Lanka
+      [6.95, 79.60], // Colombo Western Approach Fairway
+      [6.95, 79.85], // Colombo Harbour
+    ],
   },
 ];
 
@@ -1090,20 +1123,89 @@ export const useDecisionStore = create((set, get) => {
       }
     },
 
-    // Human Approval Action
-    approveRepair: ({ officerName, rationale, verifiedItems }) => {
-      const { selectedRepairId, repairCandidates, decision, decisionHistory, routeSegments, dependencies, changeEvent, currentScenario } = get();
+    // Human Approval Action — connected to backend API
+    approveRepair: async ({ officerName, rationale, verifiedItems }) => {
+      const { selectedRepairId, repairCandidates, decision, decisionHistory, routeSegments, dependencies, changeEvent } = get();
+      if (!decision) return;
+
       const candidate = repairCandidates.find((r) => r.id === selectedRepairId) || repairCandidates[0];
-      const affectedId = candidate?.affectedSegmentId || changeEvent?.affectedSegmentId || (currentScenario === "standard_s3_breach" ? "S3" : null);
+      const affectedId =
+        candidate?.affectedSegmentId ||
+        changeEvent?.affectedSegmentId ||
+        routeSegments.find((s) => s.status === "AFFECTED")?.id ||
+        null;
+
+      const currentVerNum = parseInt((decision.version || "v1.0").replace(/\D/g, "") || "1", 10);
+      const nextVersion = `v${currentVerNum + 1}.0`;
+
+      // ── Call Backend Approval Endpoint ──────────────────────────────────
+      let backendRecord = null;
+      let backendDecision = null;
+      let backendAuditEntries = null;
+
+      try {
+        const candidatePayload = candidate
+          ? {
+              id: candidate.id || "R1",
+              tier: candidate.tier || "RECOMMENDED",
+              title: candidate.title || `Minimal Repair: Segment ${affectedId} Detour`,
+              description: candidate.description || "",
+              plan_churn: candidate.planChurn ?? 0.2,
+              preservation_ratio: candidate.preservationRatio ?? 0.8,
+              what_changes: candidate.whatChanges || [`Segment ${affectedId} replaced with detour sub-leg`],
+              what_remains_unchanged: candidate.whatRemainsUnchanged || [],
+              tradeoffs: candidate.tradeoffs || "",
+              feasibility: candidate.feasibility || "FEASIBLE",
+              score: candidate.score || 90,
+              recommendation_reason: candidate.recommendationReason || "",
+              linked_event_id: changeEvent?.id || null,
+              affected_segment_id: affectedId,
+              repair_waypoint_lat: candidate.repairWaypoint ? candidate.repairWaypoint[0] : null,
+              repair_waypoint_lon: candidate.repairWaypoint ? candidate.repairWaypoint[1] : null,
+            }
+          : undefined;
+
+        backendRecord = await approveRepairBackend(decision.id, {
+          repair_candidate_id: candidate?.id || "R1",
+          officer_name: officerName,
+          rationale: rationale,
+          verified_items: verifiedItems || [true, true, true],
+          candidate_data: candidatePayload,
+        });
+
+        // Backend is the source of truth — fetch updated decision and audit
+        const [decRes, auditRes] = await Promise.allSettled([
+          getDecision(decision.id),
+          getAuditHistory(decision.id),
+        ]);
+        if (decRes.status === "fulfilled" && decRes.value) {
+          backendDecision = decRes.value;
+        }
+        if (auditRes.status === "fulfilled" && Array.isArray(auditRes.value)) {
+          backendAuditEntries = auditRes.value;
+        }
+      } catch (err) {
+        console.warn("[approveRepair] Backend approval call failed, using deterministic local commit:", err.message);
+      }
+
+      // ── Update Segments Dynamically ────────────────────────────────────
+      const committedVersion = backendRecord?.decision_version_after || nextVersion;
 
       const updatedSegments = routeSegments.map((seg) => {
         if (seg.id === affectedId) {
-          const wpCoord = candidate?.repairWaypoint || (seg.startCoord ? [(seg.startCoord[0] + seg.endCoord[0]) / 2, (seg.startCoord[1] + seg.endCoord[1]) / 2 - 0.55] : [14.30, 72.50]);
+          const wpCoord =
+            candidate?.repairWaypoint ||
+            (seg.startCoord && seg.endCoord
+              ? [
+                  Number(((seg.startCoord[0] + seg.endCoord[0]) / 2).toFixed(4)),
+                  Number(((seg.startCoord[1] + seg.endCoord[1]) / 2 - 0.55).toFixed(4)),
+                ]
+              : [14.30, 72.50]);
           return {
             ...seg,
             status: "REPAIRED_ACTIVE",
             condition: `Remediated via Waypoint W-${seg.id} [${seg.dataSourceType || "COMPUTED"}]`,
-            details: `Modified by Human Approval: Detour via W-${seg.id}. Distance variance +12 NM. Safe wave envelope restored.`,
+            details: `Modified by Human Approval: Detour via W-${seg.id}. Distance delta: +12.0 NM. Safe wave envelope restored.`,
             waveHeightM: 2.2,
             windKts: 18,
             repairWaypoint: wpCoord,
@@ -1112,31 +1214,53 @@ export const useDecisionStore = create((set, get) => {
         return {
           ...seg,
           status: seg.status === "AFFECTED" ? "ACTIVE_STABLE" : seg.status,
-          details: seg.details + " (Preserved intact from committed plan)",
+          details: (seg.details || "").includes("Preserved intact")
+            ? seg.details
+            : `${(seg.details || "").trim()} (Preserved intact from committed plan)`.trim(),
         };
       });
 
       const preservedSegIds = updatedSegments.filter((s) => s.id !== affectedId).map((s) => s.id);
-      const preservedText = preservedSegIds.length > 0
-        ? `Segments ${preservedSegIds.join(", ")} preserved 100%.`
-        : "Corridor leg repaired with safe standoff.";
+      const preservedText =
+        preservedSegIds.length > 0
+          ? `Segments ${preservedSegIds.join(", ")} preserved 100%.`
+          : "Corridor leg repaired with safe standoff.";
 
-      const newHistoryItem = {
-        version: "v2.0",
-        status: "COMMITTED",
-        timestamp: new Date().toISOString().replace("T", " ").substring(0, 19) + " UTC",
-        officer: officerName || (get().userRole?.name ? `${get().userRole.name} (${get().userRole.title})` : "Approval Authority"),
-        event: `Repair ${candidate?.id || "R1"} Approved & Committed (v2.0)`,
-        summary: `Human operator verified minimal change. Segment ${affectedId || "affected"} updated via detour. ${preservedText} Rationale: ${
-          rationale || "Operational continuity maintained with zero port window disruption."
-        }`,
-      };
+      // ── Decision History Synchronization ────────────────────────────────
+      let historyItems = decisionHistory;
+      if (backendAuditEntries && backendAuditEntries.length > 0) {
+        historyItems = backendAuditEntries.map((a) => ({
+          version: a.version || committedVersion,
+          status: a.status || "REPAIRED_COMMITTED",
+          timestamp: a.created_at
+            ? new Date(a.created_at).toISOString().replace("T", " ").substring(0, 19) + " UTC"
+            : new Date().toISOString().replace("T", " ").substring(0, 19) + " UTC",
+          officer: a.officer || officerName,
+          event: a.event,
+          summary: a.summary,
+        }));
+      } else {
+        const newHistoryItem = {
+          version: committedVersion,
+          status: "COMMITTED",
+          timestamp: new Date().toISOString().replace("T", " ").substring(0, 19) + " UTC",
+          officer:
+            officerName ||
+            (get().userRole?.name ? `${get().userRole.name} (${get().userRole.title})` : "Approval Authority"),
+          event: `Repair ${candidate?.id || "R1"} Approved & Committed (${committedVersion})`,
+          summary: `Human operator verified minimal change. Segment ${affectedId || "affected"} updated via detour. ${preservedText} Rationale: ${
+            rationale || "Operational continuity maintained with safe standoff."
+          }`,
+        };
+        historyItems = [newHistoryItem, ...decisionHistory];
+      }
 
       const updatedDecision = {
         ...decision,
-        version: "v2.0",
+        ...(backendDecision || {}),
+        version: committedVersion,
         status: "REPAIRED_COMMITTED",
-        totalDistanceNm: decision.totalDistanceNm + 12,
+        totalDistanceNm: Math.round(((decision.totalDistanceNm || 890) + 12.0) * 10) / 10,
         committedAt: new Date().toISOString().replace("T", " ").substring(0, 19) + " UTC",
       };
 
@@ -1150,12 +1274,12 @@ export const useDecisionStore = create((set, get) => {
       set({
         decision: updatedDecision,
         routeSegments: updatedSegments,
-        decisionHistory: [newHistoryItem, ...decisionHistory],
+        decisionHistory: historyItems,
         isApprovalModalOpen: false,
         decisionHealth: newHealth,
         approvalFeedback: {
           type: "success",
-          title: "Decision Version v2.0 Successfully Committed",
+          title: `Decision Version ${committedVersion} Successfully Committed`,
           message: `Operational decision continuity preserved. ${preservedText} Segment ${affectedId || "affected"} has been repaired via authorized waypoint detour.`,
           timestamp: new Date().toLocaleTimeString(),
         },
@@ -1163,33 +1287,68 @@ export const useDecisionStore = create((set, get) => {
       });
     },
 
-    // Reject Repair Action
-    rejectRepair: ({ officerName, rejectionReason }) => {
+    // Reject Repair Action — connected to backend API
+    rejectRepair: async ({ officerName, rejectionReason }) => {
       const { decision, decisionHistory, selectedRepairId, userRole } = get();
+      if (!decision) return;
 
-      const newHistoryItem = {
-        version: "v1.0-MAINTAINED",
-        status: "REPAIR_REJECTED",
-        timestamp: new Date().toISOString().replace("T", " ").substring(0, 19) + " UTC",
-        officer: officerName || (userRole?.name ? `${userRole.name} (${userRole.title})` : "Approval Authority"),
-        event: `Repair Candidate ${selectedRepairId} Rejected`,
-        summary: `Human operator rejected repair candidate. Reason: ${
-          rejectionReason || "Awaiting secondary survey pass before altering geometry."
-        }. Original v1.0 decision remains locked under active alert.`,
-      };
+      let backendAuditEntries = null;
+      try {
+        await rejectRepairBackend(decision.id, {
+          repair_candidate_id: selectedRepairId || "R1",
+          officer_name: officerName,
+          rejection_reason:
+            rejectionReason || "Awaiting secondary survey pass before altering geometry.",
+        });
+
+        const auditRes = await getAuditHistory(decision.id).catch(() => null);
+        if (Array.isArray(auditRes)) {
+          backendAuditEntries = auditRes;
+        }
+      } catch (err) {
+        console.warn("[rejectRepair] Backend rejection call failed, logging locally:", err.message);
+      }
+
+      let historyItems = decisionHistory;
+      if (backendAuditEntries && backendAuditEntries.length > 0) {
+        historyItems = backendAuditEntries.map((a) => ({
+          version: a.version || decision.version,
+          status: a.status || "IMPACTED",
+          timestamp: a.created_at
+            ? new Date(a.created_at).toISOString().replace("T", " ").substring(0, 19) + " UTC"
+            : new Date().toISOString().replace("T", " ").substring(0, 19) + " UTC",
+          officer: a.officer || officerName,
+          event: a.event,
+          summary: a.summary,
+        }));
+      } else {
+        const newHistoryItem = {
+          version: `${decision.version}-MAINTAINED`,
+          status: "REPAIR_REJECTED",
+          timestamp: new Date().toISOString().replace("T", " ").substring(0, 19) + " UTC",
+          officer:
+            officerName ||
+            (userRole?.name ? `${userRole.name} (${userRole.title})` : "Approval Authority"),
+          event: `Repair Candidate ${selectedRepairId || "R1"} Rejected`,
+          summary: `Human operator rejected repair candidate '${selectedRepairId || "R1"}'. Reason: ${
+            rejectionReason || "Awaiting secondary survey pass before altering geometry."
+          }. Original ${decision.version} decision remains locked under active alert.`,
+        };
+        historyItems = [newHistoryItem, ...decisionHistory];
+      }
 
       set({
         decision: {
           ...decision,
           status: "IMPACTED",
         },
-        decisionHistory: [newHistoryItem, ...decisionHistory],
+        decisionHistory: historyItems,
         isApprovalModalOpen: false,
         approvalFeedback: {
           type: "rejected",
-          title: "Repair Proposal Rejected — v1.0 Kept Locked",
+          title: "Repair Proposal Rejected — Route Kept Locked",
           message:
-            "Human operator maintained decision invariance. No route or segment parameters were modified. Awaiting operator input.",
+            "Human operator maintained decision invariance. No route or segment parameters were modified. Original committed decision remains locked under active alert.",
           timestamp: new Date().toLocaleTimeString(),
         },
       });

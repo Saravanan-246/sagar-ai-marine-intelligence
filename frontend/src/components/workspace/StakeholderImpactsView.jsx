@@ -34,20 +34,22 @@ export default function StakeholderImpactsView() {
   const [activeSector, setActiveSector] = useState("fisheries"); // fisheries | port | environment | disaster
 
   const isImpacted = decision.status === "IMPACTED" || decision.status === "DISRUPTION_DETECTED";
-  const affectedLegId = changeEvent?.affectedSegmentId || (isImpacted ? "S3" : null);
+  // Derive affected leg STRICTLY from the active event or route segment status; NEVER invent "S3"
+  const affectedLegId =
+    changeEvent?.affectedSegmentId ||
+    routeSegments.find((s) => s.status === "AFFECTED")?.id ||
+    null;
 
+  // Active segment for detail inspection: user-selected segment, or affected segment, or first segment of current decision
   const activeSegment =
     routeSegments.find((s) => s.id === selectedSegmentId) ||
-    routeSegments.find((s) => s.id === affectedLegId) ||
-    routeSegments[0] || {
-      id: "S3",
-      name: "Central Coastal Corridor",
-      waveHeightM: 3.8,
-      windKts: 28,
-      distanceNm: 180,
-    };
+    (affectedLegId ? routeSegments.find((s) => s.id === affectedLegId) : null) ||
+    routeSegments[0] ||
+    null;
 
-  const isCurrentSegmentAffected = activeSegment.id === affectedLegId;
+  const isCurrentSegmentAffected = Boolean(
+    activeSegment && (activeSegment.id === affectedLegId || activeSegment.status === "AFFECTED")
+  );
 
   return (
     <div className="space-y-4">
@@ -133,28 +135,28 @@ export default function StakeholderImpactsView() {
 
           {/* Step 2: Affected Coastal Segment */}
           <div className={`rounded-lg border p-3 space-y-1.5 flex flex-col justify-between ${
-            isImpacted ? "border-amber-300 bg-amber-50/50" : "border-slate-200 bg-slate-50/80"
+            affectedLegId ? "border-amber-300 bg-amber-50/50" : "border-slate-200 bg-slate-50/80"
           }`}>
             <div>
               <div className="flex items-center justify-between">
                 <span className="text-[10px] font-bold text-slate-500">STEP 2</span>
                 <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded ${
-                  isImpacted ? "bg-amber-200 text-amber-900" : "bg-emerald-100 text-emerald-800"
+                  affectedLegId ? "bg-amber-200 text-amber-900" : "bg-emerald-100 text-emerald-800"
                 }`}>
-                  {isImpacted ? `Leg ${affectedLegId}` : "All Clear"}
+                  {affectedLegId ? `Leg ${affectedLegId}` : "All Clear"}
                 </span>
               </div>
               <h4 className="text-xs font-bold text-slate-900 mt-1">
                 Affected Coastal Area
               </h4>
               <p className="text-[11px] text-slate-600 leading-snug">
-                {isImpacted
+                {affectedLegId
                   ? `Nearshore sector ${affectedLegId} subject to wave exceedance envelope.`
-                  : "All corridor segments operating within nominal limits."}
+                  : "All corridor segments operating within nominal limits. Zero coastal hazard alerts."}
               </p>
             </div>
             <div className="text-[10px] font-mono text-slate-500 pt-1 border-t border-slate-200/60">
-              Corridor Leg: {activeSegment.id}
+              {affectedLegId ? `Corridor Leg: ${affectedLegId}` : "Corridor Status: Nominal"}
             </div>
           </div>
 
@@ -370,7 +372,7 @@ export default function StakeholderImpactsView() {
                 </div>
                 <p className="text-[11px] text-slate-600 leading-snug">
                   {isCurrentSegmentAffected
-                    ? "High-yield PFZ bands identified 22 NM offshore of Segment S3. Detour trajectory leaves standard 15 NM standoff buffer for active trawlers."
+                    ? `High-yield PFZ bands identified near offshore corridor of Leg ${activeSegment?.id || "corridor"}. Detour trajectory maintains standard 15 NM standoff buffer for active trawlers.`
                     : "PFZ waypoints monitored. Commercial fishing vessels operating along standard bathymetric lines."}
                 </p>
                 <div className="text-[10px] text-slate-500 font-mono pt-1 border-t border-slate-200">
@@ -599,7 +601,9 @@ export default function StakeholderImpactsView() {
                   </span>
                 </div>
                 <p className="text-[11px] text-slate-600 leading-snug">
-                  Designated maritime refuge port identified at Mormugao Deep Draft Anchorage (distance: 44 NM east from waypoint W-S3) in case of unexpected sea state escalation.
+                  {isCurrentSegmentAffected
+                    ? `Designated maritime refuge port identified along coastal corridor (standby for Leg ${activeSegment?.id || "corridor"}) in case of unexpected sea state escalation.`
+                    : "Standard emergency safe haven harbors identified along coastal passage corridor in case of severe weather escalation."}
                 </p>
                 <div className="text-[10px] text-slate-500 font-mono pt-1 border-t border-slate-200">
                   Refuge Harbor: 44 NM Standby

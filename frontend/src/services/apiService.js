@@ -7,7 +7,7 @@
  * Use these to persist decisions, events, and approvals to the database.
  */
 
-const BASE_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000/api";
+const BASE_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8001/api";
 
 async function apiFetch(path, options = {}) {
   const res = await fetch(`${BASE_URL}${path}`, {

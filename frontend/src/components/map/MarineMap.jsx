@@ -128,13 +128,12 @@ export default function MarineMap({
               <span>AIS: UNAVAILABLE</span>
             </span>
 
-            {/* Scenario Marker */}
-            <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-wide border ${
-              decision.dataSourceType === "COMPUTED"
-                ? "bg-blue-50 text-blue-900 border-blue-300"
-                : "bg-amber-50 text-amber-900 border-amber-300"
-            }`}>
-              {decision.dataSourceType === "COMPUTED" ? "CORRIDOR: COMPUTED" : "DECISION: SIMULATED"}
+            {/* Planning Corridor Label */}
+            <span
+              className="rounded px-2 py-0.5 text-[10px] font-bold tracking-wide border bg-sky-50 text-sky-900 border-sky-300"
+              title="Geometry is an algorithmically computed ocean planning corridor. NOT a live navigational chart. NOT an AIS track."
+            >
+              COMPUTED PLANNING CORRIDOR
             </span>
           </div>
         </div>
@@ -417,8 +416,9 @@ export default function MarineMap({
           </div>
         </div>
 
-        <div className="text-[10px] text-slate-500 font-mono">
-          Provider: {providerMode === "maplibre" ? "MapLibre GL JS (WebGL Interactive)" : "SvgMapAdapter (Vector Fallback)"}
+        <div className="flex flex-wrap items-center gap-2 text-[10px] text-slate-500 font-mono">
+          <span className="text-slate-400">NOT a live navigational chart • NOT an AIS track</span>
+          <span>• Provider: {providerMode === "maplibre" ? "MapLibre GL JS" : "SvgMapAdapter"}</span>
         </div>
       </div>
     </div>

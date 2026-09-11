@@ -40,6 +40,8 @@ export default function HumanApprovalModal() {
   const [rejectionReason, setRejectionReason] = useState(
     "Awaiting secondary acoustic calibration pass before committing trajectory adjustment."
   );
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState(null);
 
   if (!isApprovalModalOpen) return null;
 
@@ -47,25 +49,49 @@ export default function HumanApprovalModal() {
     repairCandidates.find((c) => c.id === selectedRepairId) || repairCandidates[0];
 
   // Dynamic default rationale derived from the active candidate + decision context
-  const rationaleDefault = rationale || (candidate
-    ? `Minimal repair authorized: Segment ${candidate.affectedSegmentId} routed via Waypoint W-${candidate.affectedSegmentId} (${candidate.repairWaypoint ? candidate.repairWaypoint[0].toFixed(2) + "°N, " + candidate.repairWaypoint[1].toFixed(2) + "°E" : "offshore standoff"}). Plan churn ${candidate.planChurn} — ${Math.round((candidate.preservationRatio || 1) * 100)}% of corridor preserved.`
-    : "Minimal repair authorized. Operational continuity maintained.");
+  const rationaleDefault =
+    rationale ||
+    (candidate
+      ? `Minimal repair authorized: Segment ${candidate.affectedSegmentId || "affected"} routed via Waypoint W-${candidate.affectedSegmentId || "detour"} (${candidate.repairWaypoint ? candidate.repairWaypoint[0].toFixed(2) + "°N, " + candidate.repairWaypoint[1].toFixed(2) + "°E" : "offshore standoff"}). Plan churn ${candidate.planChurn} — ${Math.round((candidate.preservationRatio || 1) * 100)}% of corridor preserved.`
+      : "Minimal repair authorized. Operational continuity maintained.");
 
-  const canApprove = isApprovalAuthority && check1 && check2 && check3 && officerName.trim().length > 0;
+  const currentVerNum = parseInt((decision?.version || "v1.0").replace(/\D/g, "") || "1", 10);
+  const nextVersion = `v${currentVerNum + 1}.0`;
 
-  const handleApprove = () => {
-    approveRepair({
-      officerName,
-      rationale: rationale || rationaleDefault,
-      verifiedItems: [check1, check2, check3],
-    });
+  const canApprove =
+    isApprovalAuthority && check1 && check2 && check3 && officerName.trim().length > 0;
+
+  const handleApprove = async () => {
+    if (!canApprove || isSubmitting) return;
+    setIsSubmitting(true);
+    setSubmitError(null);
+    try {
+      await approveRepair({
+        officerName,
+        rationale: rationale || rationaleDefault,
+        verifiedItems: [check1, check2, check3],
+      });
+    } catch (err) {
+      setSubmitError(err.message || "Failed to submit approval to backend.");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handleReject = () => {
-    rejectRepair({
-      officerName,
-      rejectionReason,
-    });
+  const handleReject = async () => {
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    setSubmitError(null);
+    try {
+      await rejectRepair({
+        officerName,
+        rejectionReason,
+      });
+    } catch (err) {
+      setSubmitError(err.message || "Failed to submit rejection to backend.");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -129,7 +155,7 @@ export default function HumanApprovalModal() {
                 1. Original Decision vs Proposed Repair
               </span>
               <span className="text-[11px] font-mono text-slate-500">
-                v1.0 (Committed) → v2.0 (Proposed)
+                {decision.version} (Committed) → {nextVersion} (Proposed)
               </span>
             </div>
 
@@ -168,74 +194,129 @@ export default function HumanApprovalModal() {
             </div>
           </div>
 
-          {/* 2 & 3. Triggering Event & Affected Dependency */}
+          {/* ── CORE CONTINUITY WORKFLOW: 4 EXPLICIT STEPS ── */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-            <div className="rounded-lg border border-amber-200 bg-amber-50/50 p-3 space-y-1">
-              <div className="flex items-center gap-1.5 text-amber-900 font-bold">
-                <AlertTriangle className="h-4 w-4 text-amber-700" />
-                <span>2. Triggering Change Event</span>
+            {/* 1. CHANGE DETECTED */}
+            <div className="rounded-xl border border-amber-300 bg-amber-50/40 p-3.5 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-black uppercase tracking-wider text-amber-900 flex items-center gap-1.5">
+                  <AlertTriangle className="h-4 w-4 text-amber-600" />
+                  CHANGE DETECTED
+                </span>
+                <span className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded border ${
+                  changeEvent?.sourceType === "REAL"
+                    ? "bg-emerald-100 text-emerald-900 border-emerald-300"
+                    : "bg-amber-100 text-amber-900 border-amber-300"
+                }`}>
+                  {changeEvent?.sourceType || "SIMULATED"}
+                </span>
               </div>
-              <p className="font-semibold text-slate-900 text-xs">{changeEvent?.title || "Operational Hazard Ingestion"}</p>
-              <p className="text-[11px] text-slate-700 leading-snug">
-                {changeEvent?.description || "Simulated hazard boundary expanding across committed passage corridor."}
-              </p>
-            </div>
-
-            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-1">
-              <div className="flex items-center gap-1.5 text-slate-800 font-bold">
-                <Anchor className="h-4 w-4 text-blue-600" />
-                <span>3. Affected Dependencies</span>
-              </div>
-              <ul className="text-[11px] text-slate-700 space-y-0.5 list-disc pl-3 leading-snug">
-                <li><strong>Arrival Window:</strong> Requires arrival within allowable tolerance window.</li>
-                <li><strong>Safety Ceiling:</strong> Dynamic vessel stability subject to operating envelope.</li>
-              </ul>
-            </div>
-          </div>
-
-          {/* 4 & 5. Affected Segment & Preserved Commitments */}
-          <div className="rounded-lg border border-slate-200 p-3 space-y-2 bg-white text-xs">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-1.5">
-              <span className="font-bold text-slate-900">
-                4. Affected Leg: <span className="text-amber-800 font-bold">{changeEvent?.affectedSegmentId ? `Leg ${changeEvent.affectedSegmentId} Only` : "Zero Affected Legs"}</span>
-              </span>
-              <span className="text-emerald-700 font-bold text-[11px] flex items-center gap-1">
-                <CheckCircle2 className="h-3.5 w-3.5" />
-                5. Preserved: Unaffected Legs (100% Intact)
-              </span>
-            </div>
-
-            <div className="text-[11px] text-slate-600 grid grid-cols-2 sm:grid-cols-4 gap-2">
-              <div className="rounded border border-slate-100 bg-slate-50 p-2">
-                <span className="font-semibold text-slate-800 block">Departure Leg</span>
-                <span className="text-emerald-700 font-medium">Completed &amp; Locked</span>
-              </div>
-              <div className="rounded border border-slate-100 bg-slate-50 p-2">
-                <span className="font-semibold text-slate-800 block">Active Traversal</span>
-                <span className="text-emerald-700 font-medium">Maintained</span>
-              </div>
-              <div className="rounded border border-amber-200 bg-amber-50 p-2">
-                <span className="font-bold text-amber-900 block">{changeEvent?.affectedSegmentId ? `Leg ${changeEvent.affectedSegmentId}` : "Transition Leg"}</span>
-                <span className="text-amber-800 font-bold">Targeted Repair</span>
-              </div>
-              <div className="rounded border border-slate-100 bg-slate-50 p-2">
-                <span className="font-semibold text-slate-800 block">Terminus Legs</span>
-                <span className="text-emerald-700 font-medium">100% Preserved</span>
+              <div>
+                <p className="text-sm font-bold text-slate-950">
+                  Affected Segment: <span className="text-red-700 underline font-mono">Leg {candidate?.affectedSegmentId || changeEvent?.affectedSegmentId || "LEG-02"}</span>
+                </p>
+                <p className="text-[11px] text-slate-600 mt-1">
+                  {changeEvent?.title || "Environmental Hazard Exceedance Alert"}
+                </p>
+                <p className="text-[10px] text-slate-500 font-mono mt-0.5">
+                  ID: {changeEvent?.id || "EVT-DYNAMIC"} • Location: {changeEvent?.location || "Segment Midpoint"}
+                </p>
               </div>
             </div>
-          </div>
 
-          {/* 6 & 7. Operational Reason & Trade-offs */}
-          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs space-y-1">
-            <span className="font-bold text-slate-800 block">
-              6. Minimal-Change Reason &amp; 7. Trade-Offs:
-            </span>
-            <p className="text-[11px] text-slate-700 leading-relaxed">
-              <strong className="text-slate-900">Reason:</strong> {candidate?.recommendationReason || "Preserves maximum corridor segments with minimal detour."}
-            </p>
-            <p className="text-[11px] text-slate-700 leading-relaxed">
-              <strong className="text-slate-900">Trade-offs:</strong> {candidate?.tradeoffs || "Minimal fuel increase; preserves berth arrival."}
-            </p>
+            {/* 2. WHY (VIOLATED CONSTRAINT / THRESHOLD / DEPENDENCY) */}
+            <div className="rounded-xl border border-red-300 bg-red-50/40 p-3.5 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-black uppercase tracking-wider text-red-900 flex items-center gap-1.5">
+                  <ShieldAlert className="h-4 w-4 text-red-600" />
+                  WHY
+                </span>
+                <span className="text-[9px] font-mono font-bold bg-red-100 text-red-800 border border-red-200 px-1.5 py-0.5 rounded">
+                  CONSTRAINT BREACH
+                </span>
+              </div>
+              <div>
+                <p className="text-xs font-bold text-red-950">
+                  {changeEvent?.breachValue
+                    ? `SWH ${changeEvent.breachValue}m > allowed ${changeEvent.breachThreshold || 4.0}m limit`
+                    : "SWH 4.8m > allowed 4.0m operational threshold"}
+                </p>
+                <p className="text-[11px] text-slate-700 mt-1 leading-snug">
+                  <strong>Violated Dependency:</strong>{" "}
+                  <span className="font-mono text-red-800 font-semibold">
+                    {impactAnalysis?.violatedDependencyIds?.length
+                      ? impactAnalysis.violatedDependencyIds.join(", ")
+                      : "DEP-02 (SAFETY_DYNAMIC_STABILITY)"}
+                  </span>
+                </p>
+                <p className="text-[10px] text-slate-500 mt-0.5">
+                  Dynamic vessel stability envelope compromised on Leg {candidate?.affectedSegmentId || changeEvent?.affectedSegmentId || "LEG-02"}. Standoff required.
+                </p>
+              </div>
+            </div>
+
+            {/* 3. MINIMAL REPAIR */}
+            <div className="rounded-xl border border-blue-300 bg-blue-50/40 p-3.5 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-black uppercase tracking-wider text-blue-900 flex items-center gap-1.5">
+                  <Anchor className="h-4 w-4 text-blue-600" />
+                  MINIMAL REPAIR
+                </span>
+                <span className="text-[9px] font-mono font-bold bg-blue-100 text-blue-900 border border-blue-200 px-1.5 py-0.5 rounded">
+                  CANDIDATE {candidate?.id || "R1"}
+                </span>
+              </div>
+              <div>
+                <p className="text-xs font-bold text-blue-950">
+                  Modifies ONLY Leg {candidate?.affectedSegmentId || changeEvent?.affectedSegmentId || "LEG-02"}
+                </p>
+                <p className="text-[11px] text-slate-700 mt-1 leading-snug">
+                  {candidate?.repairWaypoint
+                    ? `Waypoint detour via W-${candidate.affectedSegmentId} (${candidate.repairWaypoint[0].toFixed(2)}°N, ${candidate.repairWaypoint[1].toFixed(2)}°E)`
+                    : `Detour via Waypoint W-${candidate?.affectedSegmentId || changeEvent?.affectedSegmentId || "DETOUR"}`}
+                  {" • "}Distance delta: +12.0 NM (+35m ETA).
+                </p>
+                <p className="text-[10px] text-blue-800 font-semibold mt-0.5">
+                  Plan Churn: {candidate?.planChurn ?? 0.25} ({Math.round((candidate?.preservationRatio ?? 0.75) * 100)}% route preserved)
+                </p>
+              </div>
+            </div>
+
+            {/* 4. PRESERVED */}
+            <div className="rounded-xl border border-emerald-300 bg-emerald-50/40 p-3.5 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-black uppercase tracking-wider text-emerald-900 flex items-center gap-1.5">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                  PRESERVED
+                </span>
+                <span className="text-[9px] font-mono font-bold bg-emerald-100 text-emerald-900 border border-emerald-200 px-1.5 py-0.5 rounded">
+                  100% INTACT
+                </span>
+              </div>
+              <div>
+                <p className="text-xs font-bold text-emerald-950">
+                  Unaffected Legs:{" "}
+                  <span className="font-mono text-emerald-800 font-bold">
+                    {(routeSegments || [])
+                      .filter((s) => s.id !== (candidate?.affectedSegmentId || changeEvent?.affectedSegmentId))
+                      .map((s) => s.id)
+                      .join(", ") || "All other corridor legs"}
+                  </span>
+                </p>
+                <p className="text-[11px] text-slate-700 mt-1 leading-snug">
+                  All unaffected segments remain untouched and preserved from {decision?.version || "v1.0"} commitment.
+                </p>
+                <div className="flex items-center gap-1 flex-wrap mt-1.5">
+                  {(routeSegments || [])
+                    .filter((s) => s.id !== (candidate?.affectedSegmentId || changeEvent?.affectedSegmentId))
+                    .map((s) => (
+                      <span key={s.id} className="text-[9px] font-mono font-bold bg-white border border-emerald-300 text-emerald-900 px-1.5 py-0.5 rounded">
+                        Leg {s.id}: Preserved
+                      </span>
+                    ))}
+                </div>
+              </div>
+            </div>
           </div>
 
           {/* 8. Mandatory Human Verification Checkpoints */}
@@ -331,10 +412,12 @@ export default function HumanApprovalModal() {
                     Cancel Rejection
                   </button>
                   <button
+                    type="button"
+                    disabled={isSubmitting || !rejectionReason.trim()}
                     onClick={handleReject}
-                    className="rounded bg-red-600 px-3 py-1 text-xs font-semibold text-white hover:bg-red-700 transition"
+                    className="rounded bg-red-600 px-3 py-1 text-xs font-semibold text-white hover:bg-red-700 transition cursor-pointer disabled:opacity-50"
                   >
-                    Confirm Rejection &amp; Maintain v1.0 Locked
+                    {isSubmitting ? "Submitting..." : `Confirm Rejection & Maintain ${decision.version || "Current"} Locked`}
                   </button>
                 </div>
               </div>
@@ -345,10 +428,12 @@ export default function HumanApprovalModal() {
         {/* Modal Actions Footer */}
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-5 py-3">
           <div className="text-[11px] text-slate-500">
-            {canApprove ? (
+            {submitError ? (
+              <span className="text-red-600 font-semibold">{submitError}</span>
+            ) : canApprove ? (
               <span className="text-emerald-700 font-semibold flex items-center gap-1">
                 <CheckCircle2 className="h-3.5 w-3.5" />
-                All 3 invariants verified. Ready to commit Version v2.0.
+                All 3 invariants verified. Ready to commit Version {nextVersion}.
               </span>
             ) : (
               <span className="text-amber-700 font-semibold">
@@ -361,10 +446,10 @@ export default function HumanApprovalModal() {
             {!isRejecting && (
               <button
                 type="button"
-                disabled={!isApprovalAuthority}
+                disabled={!isApprovalAuthority || isSubmitting}
                 onClick={() => setIsRejecting(true)}
                 className={`rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${
-                  isApprovalAuthority
+                  isApprovalAuthority && !isSubmitting
                     ? "border-slate-300 bg-white text-slate-700 hover:bg-slate-50 hover:text-slate-900 cursor-pointer"
                     : "border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed"
                 }`}
@@ -376,16 +461,16 @@ export default function HumanApprovalModal() {
 
             <button
               type="button"
-              disabled={!canApprove}
+              disabled={!canApprove || isSubmitting}
               onClick={handleApprove}
               className={`inline-flex items-center gap-1.5 rounded-lg px-4 py-1.5 text-xs font-bold transition shadow-xs ${
-                canApprove
-                  ? "bg-blue-600 text-white hover:bg-blue-700"
+                canApprove && !isSubmitting
+                  ? "bg-blue-600 text-white hover:bg-blue-700 cursor-pointer"
                   : "bg-slate-200 text-slate-400 cursor-not-allowed"
               }`}
             >
               <GitCommit className="h-4 w-4" />
-              <span>Approve &amp; Commit Version v2.0</span>
+              <span>{isSubmitting ? "Committing to Backend..." : `Approve & Commit Version ${nextVersion}`}</span>
             </button>
           </div>
         </div>

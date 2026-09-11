@@ -1,4 +1,5 @@
 import React from "react";
+import { getDeterministicOffshorePath } from "../../data/coastalLocations";
 
 /**
  * SvgMapAdapter — High-Precision Nautical Vector Rendering Provider
@@ -245,10 +246,22 @@ export default function SvgMapAdapter({
       {segments && segments.length > 0 ? (
         <g>
           {segments.map((seg) => {
-            const x1 = toSvgX(seg.startCoord[1]);
-            const y1 = toSvgY(seg.startCoord[0]);
-            const x2 = toSvgX(seg.endCoord[1]);
-            const y2 = toSvgY(seg.endCoord[0]);
+            const points = (seg.coordinates && seg.coordinates.length >= 2)
+              ? seg.coordinates
+              : (seg.startCoord && seg.endCoord
+                  ? getDeterministicOffshorePath(seg.startCoord, seg.endCoord)
+                  : []);
+            if (points.length < 2) return null;
+
+            const svgPathD = points
+              .map((p, idx) => `${idx === 0 ? "M" : "L"} ${toSvgX(p[1])} ${toSvgY(p[0])}`)
+              .join(" ");
+
+            const midIdx = Math.floor(points.length / 2);
+            const midPt = points[midIdx];
+            const midX = toSvgX(midPt[1]);
+            const midY = toSvgY(midPt[0]);
+
             const isSelected = selectedSegmentId === seg.id;
             const isAffected = Boolean(
               changeEvent &&
@@ -272,43 +285,41 @@ export default function SvgMapAdapter({
                 className="cursor-pointer"
               >
                 {/* Thick hit area */}
-                <line
-                  x1={x1}
-                  y1={y1}
-                  x2={x2}
-                  y2={y2}
+                <path
+                  d={svgPathD}
+                  fill="none"
                   stroke="transparent"
-                  strokeWidth={20}
+                  strokeWidth={22}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
                 />
                 {/* Selected highlight line */}
                 {isSelected && (
-                  <line
-                    x1={x1}
-                    y1={y1}
-                    x2={x2}
-                    y2={y2}
+                  <path
+                    d={svgPathD}
+                    fill="none"
                     stroke="#38bdf8"
-                    strokeWidth={7}
+                    strokeWidth={7.5}
                     strokeOpacity={0.6}
                     strokeLinecap="round"
+                    strokeLinejoin="round"
                   />
                 )}
                 {/* Route segment line */}
-                <line
-                  x1={x1}
-                  y1={y1}
-                  x2={x2}
-                  y2={y2}
+                <path
+                  d={svgPathD}
+                  fill="none"
                   stroke={strokeColor}
                   strokeWidth={isSelected ? 4.5 : isAffected ? 4 : 3}
                   strokeDasharray={isAffected ? "8,5" : undefined}
                   strokeLinecap="round"
+                  strokeLinejoin="round"
                 />
                 {isAffected && !isRepaired && (
                   <g>
                     <rect
-                      x={(x1 + x2) / 2 - 50}
-                      y={(y1 + y2) / 2 - 11}
+                      x={midX - 50}
+                      y={midY - 11}
                       width="100"
                       height="20"
                       rx="4"
@@ -317,8 +328,8 @@ export default function SvgMapAdapter({
                       strokeWidth="1.5"
                     />
                     <text
-                      x={(x1 + x2) / 2}
-                      y={(y1 + y2) / 2 + 3}
+                      x={midX}
+                      y={midY + 3}
                       textAnchor="middle"
                       className="text-[9px] font-bold fill-amber-900"
                     >
@@ -530,6 +541,17 @@ export default function SvgMapAdapter({
           })}
         </g>
       )}
+      {/* Explicit Truth Notice Watermark */}
+      <g className="pointer-events-none">
+        <rect x="20" y="20" width="220" height="38" rx="6" fill="#0f172a" fillOpacity="0.92" stroke="#334155" strokeWidth="1" />
+        <circle cx="34" cy="35" r="3" fill="#38bdf8" />
+        <text x="44" y="38" className="text-[10px] font-bold fill-sky-300 font-mono tracking-wider">
+          COMPUTED PLANNING CORRIDOR
+        </text>
+        <text x="32" y="50" className="text-[8px] fill-slate-300 font-sans">
+          • NOT a live navigational chart • NOT an AIS track
+        </text>
+      </g>
     </svg>
   );
 }

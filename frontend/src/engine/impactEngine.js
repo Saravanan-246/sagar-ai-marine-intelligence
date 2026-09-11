@@ -91,7 +91,7 @@ export function evaluateDecisionImpact({ decision, changeEvent, dependencies, co
   const atRiskSegmentIds = [];
   const unaffectedSegmentIds = [];
 
-  // 1. Evaluate spatial intersection and direct segment thresholds
+  // 1. Evaluate direct segment thresholds and spatial intersection
   decision.segments.forEach((segment) => {
     const hasCoords = Boolean(
       changeEvent.eventCoordinates &&
@@ -102,15 +102,16 @@ export function evaluateDecisionImpact({ decision, changeEvent, dependencies, co
     );
 
     let isTargeted = false;
-    if (hasCoords) {
+    if (changeEvent.affectedSegmentId) {
+      // Direct segment violation takes precedence (e.g. simulated or specific segment observation)
+      isTargeted = changeEvent.affectedSegmentId === segment.id;
+    } else if (hasCoords) {
       isTargeted = checkSpatialIntersection(
         segment.startCoord,
         segment.endCoord,
         changeEvent.eventCoordinates,
         changeEvent.radiusNm || 45
       );
-    } else if (changeEvent.affectedSegmentId) {
-      isTargeted = changeEvent.affectedSegmentId === segment.id;
     }
 
     if (isTargeted) {
@@ -126,12 +127,12 @@ export function evaluateDecisionImpact({ decision, changeEvent, dependencies, co
 
   dependencies.forEach((dep) => {
     // Check if any linked segment is affected
-    const hasAffectedLink = dep.linkedSegments.some((segId) =>
-      affectedSegmentIds.includes(segId)
-    );
+    const hasAffectedLink = dep.linkedSegments && dep.linkedSegments.length > 0
+      ? dep.linkedSegments.some((segId) => affectedSegmentIds.includes(segId))
+      : affectedSegmentIds.length > 0;
 
     if (hasAffectedLink) {
-      if (dep.impactLevel === "CRITICAL") {
+      if (dep.impactLevel === "CRITICAL" || dep.impactLevel === "HIGH" || dep.id?.includes("SAFETY")) {
         violatedDependencyIds.push(dep.id);
       } else {
         atRiskDependencyIds.push(dep.id);
@@ -147,6 +148,17 @@ export function evaluateDecisionImpact({ decision, changeEvent, dependencies, co
   const planChurn = totalSegments > 0 ? Number((changedCount / totalSegments).toFixed(2)) : 0;
   const preservationRatio = totalSegments > 0 ? Number((1 - planChurn).toFixed(2)) : 1.0;
 
+  let reason = "";
+  if (changeEvent.breachValue && changeEvent.breachThreshold) {
+    const param = changeEvent.breachParameter || "SWH";
+    reason = `Constraint Violation: ${param} ${changeEvent.breachValue}m > allowed ${changeEvent.breachThreshold}m. Dependency breach (${violatedDependencyIds.join(", ") || "SAFETY_DYNAMIC_STABILITY"}) affects Segment ${affectedSegmentIds.join(", ")} while preserving ${unaffectedSegmentIds.join(", ")}.`;
+  } else if (affectedSegmentIds.length > 0) {
+    const depText = violatedDependencyIds.length > 0 ? ` Violated Dependencies: ${violatedDependencyIds.join(", ")}.` : "";
+    reason = `Deterministic evaluation: ${changeEvent.description || "Environmental limit breached."}.${depText} Restricts Segment ${affectedSegmentIds.join(", ")} while preserving ${unaffectedSegmentIds.join(", ")}.`;
+  } else {
+    reason = "No segments intersect the event envelope. All legs nominal.";
+  }
+
   return {
     affectedSegmentIds,
     unaffectedSegmentIds,
@@ -154,9 +166,7 @@ export function evaluateDecisionImpact({ decision, changeEvent, dependencies, co
     violatedDependencyIds,
     atRiskDependencyIds,
     severity: changeEvent.severity || "HIGH",
-    reason: `Deterministic spatial evaluation: ${changeEvent.description}. Restricts Segment ${affectedSegmentIds.join(
-      ", "
-    )} while preserving ${unaffectedSegmentIds.join(", ")}.`,
+    reason,
     planChurn,
     preservationRatio,
     isCatastrophicCollapse: false,
